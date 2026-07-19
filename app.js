@@ -29,7 +29,7 @@ const els = {
 
 const cores = Math.min(navigator.hardwareConcurrency || 4, 8);
 const isolated = !!window.crossOriginIsolated;
-const PREVIEW_HEIGHT = 1080; // change to 720 for extra speed on weak machines
+const PREVIEW_HEIGHT = 720; // 720 = faster prep; raise to 1080 for a sharper proxy
 
 /* ── notices ─────────────────────────────────────────── */
 let noticeTimer = null;
@@ -346,6 +346,21 @@ let engineReady = null;
 let currentJob = null;
 let logTail = [];
 let lastSpeed = "";
+let lastFrame = 0;
+let jobStart = 0;
+
+function paintPrep() {
+  const j = currentJob;
+  if (!j) return;
+  els.prepPct.textContent = (j.pct || 0) + "%";
+  const secs = jobStart ? Math.round((performance.now() - jobStart) / 1000) : 0;
+  const bits = [];
+  if (lastFrame) bits.push(`frame ${lastFrame}`);
+  bits.push(`${secs}s elapsed`);
+  if (lastSpeed) bits.push(`${lastSpeed} realtime`);
+  els.prepSpeed.textContent = bits.join(" · ");
+}
+let prepTimer = null;
 
 function abs(p) { return new URL(p, window.location.href).href; }
 
@@ -359,15 +374,17 @@ function initEngine() {
     if (logTail.length > 40) logTail.shift();
     const sp = message.match(/speed=\s*([\d.]+)x/);
     if (sp) lastSpeed = sp[1] + "×";
+    const fr = message.match(/frame=\s*(\d+)/);
+    if (fr) {
+      lastFrame = +fr[1];
+      if (currentJob === activeClip) paintPrep();
+    }
   });
   ffmpeg.on("progress", ({ progress }) => {
     if (!currentJob) return;
     const pct = Math.max(0, Math.min(100, Math.round((progress || 0) * 100)));
     currentJob.pct = pct;
-    if (currentJob === activeClip) {
-      els.prepPct.textContent = pct + "%";
-      els.prepSpeed.textContent = lastSpeed ? `decoding at ${lastSpeed} realtime` : "";
-    }
+    if (currentJob === activeClip) paintPrep();
     renderClips();
   });
   engineReady = ffmpeg
@@ -391,7 +408,11 @@ async function transcode(clip) {
   clip.status = "working";
   clip.pct = 0;
   lastSpeed = "";
+  lastFrame = 0;
+  jobStart = performance.now();
   logTail = [];
+  clearInterval(prepTimer);
+  prepTimer = setInterval(() => { if (currentJob === activeClip) paintPrep(); }, 1000);
   renderClips();
   if (clip === activeClip) selectClip(clip);
 
@@ -400,6 +421,7 @@ async function transcode(clip) {
   await ffmpeg.mount("WORKERFS", { files: [clip.file] }, "/input");
   try {
     const ret = await ffmpeg.exec([
+      "-thread_type", "frame",
       "-threads", String(cores),
       "-i", inPath,
       "-map", "0:v:0", "-map", "0:a:0?",
@@ -408,6 +430,7 @@ async function transcode(clip) {
       "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
       "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-b:a", "160k", "-ac", "2",
+      "-threads", String(cores),
       "out.mp4",
     ]);
     if (ret !== 0) throw new Error("decode failed");
@@ -427,6 +450,7 @@ async function transcode(clip) {
         : "Couldn't decode this file. It may use a codec the engine doesn't include.";
     }
   } finally {
+    clearInterval(prepTimer);
     if (clip.status === "failed" || clip.status === "cancelled") {
       // A crash/OOM can leave the wasm instance aborted and unusable.
       // Tear it down so the NEXT clip builds a fresh engine instead of
