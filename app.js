@@ -347,6 +347,7 @@ let currentJob = null;
 let logTail = [];
 let lastSpeed = "";
 let lastFrame = 0;
+let lastAdvance = 0;
 let jobStart = 0;
 
 function paintPrep() {
@@ -355,6 +356,7 @@ function paintPrep() {
   els.prepPct.textContent = (j.pct || 0) + "%";
   const secs = jobStart ? Math.round((performance.now() - jobStart) / 1000) : 0;
   const bits = [];
+  if (j.safeMode) bits.push("safe mode");
   if (lastFrame) bits.push(`frame ${lastFrame}`);
   bits.push(`${secs}s elapsed`);
   if (lastSpeed) bits.push(`${lastSpeed} realtime`);
@@ -376,7 +378,8 @@ function initEngine() {
     if (sp) lastSpeed = sp[1] + "×";
     const fr = message.match(/frame=\s*(\d+)/);
     if (fr) {
-      lastFrame = +fr[1];
+      const n = +fr[1];
+      if (n > lastFrame) { lastFrame = n; lastAdvance = performance.now(); }
       if (currentJob === activeClip) paintPrep();
     }
   });
@@ -410,9 +413,18 @@ async function transcode(clip) {
   lastSpeed = "";
   lastFrame = 0;
   jobStart = performance.now();
+  lastAdvance = jobStart;
   logTail = [];
   clearInterval(prepTimer);
-  prepTimer = setInterval(() => { if (currentJob === activeClip) paintPrep(); }, 1000);
+  prepTimer = setInterval(() => {
+    if (currentJob !== clip) return;
+    if (currentJob === activeClip) paintPrep();
+    // Watchdog: no frame progress for 30s = the engine has deadlocked.
+    if (performance.now() - lastAdvance > 30000) {
+      clip.stalled = true;
+      try { ffmpeg.terminate(); } catch {}
+    }
+  }, 1000);
   renderClips();
   if (clip === activeClip) selectClip(clip);
 
@@ -420,9 +432,12 @@ async function transcode(clip) {
   try { await ffmpeg.createDir("/input"); } catch {}
   await ffmpeg.mount("WORKERFS", { files: [clip.file] }, "/input");
   try {
+    const dec = clip.safeMode ? 1 : Math.min(4, cores); // frame-threaded HEVC decode
+    const enc = clip.safeMode ? 1 : 2;                  // x264 (never the bottleneck here)
     const ret = await ffmpeg.exec([
+      "-filter_threads", "1",
       "-thread_type", "frame",
-      "-threads", String(cores),
+      "-threads", String(dec),
       "-i", inPath,
       "-map", "0:v:0", "-map", "0:a:0?",
       "-vf", `scale=-2:min(${PREVIEW_HEIGHT}\\,ih)`,
@@ -430,7 +445,7 @@ async function transcode(clip) {
       "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
       "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-b:a", "160k", "-ac", "2",
-      "-threads", String(cores),
+      "-threads", String(enc),
       "out.mp4",
     ]);
     if (ret !== 0) throw new Error("decode failed");
@@ -440,22 +455,30 @@ async function transcode(clip) {
     clip.playUrl = URL.createObjectURL(clip.blob);
     clip.status = "ready";
   } catch (e) {
-    if (clip.status !== "cancelled") {
+    if (clip.stalled && !clip.safeMode) {
+      // Multithreaded decode deadlocked. Retry this clip once, single-threaded.
+      clip.stalled = false;
+      clip.safeMode = true;
+      clip.status = "queued";
+      clip.pct = 0;
+      notify("Multithreaded decode stalled on this machine — retrying in safe mode (slower, but reliable).", 8000);
+    } else if (clip.status !== "cancelled") {
       clip.status = "failed";
       const tail = logTail.join("\n");
       const memoryHit = /out of memory|abort|memory access|table index|null function/i.test(tail);
       const big = clip.file.size > 1_100_000_000; // ~1.1 GB+
-      clip.error = (memoryHit || big)
+      clip.error = clip.stalled
+        ? "Decoding stalled even in safe mode. This machine/browser can't get through this file — a Premiere-exported H.264 proxy will play instantly here instead."
+        : (memoryHit || big)
         ? "Too large for the browser's memory ceiling — very long / multi-GB clips can exceed it. Try a shorter section, or set PREVIEW_HEIGHT to 720 in app.js. Other clips are unaffected."
         : "Couldn't decode this file. It may use a codec the engine doesn't include.";
     }
   } finally {
     clearInterval(prepTimer);
-    if (clip.status === "failed" || clip.status === "cancelled") {
-      // A crash/OOM can leave the wasm instance aborted and unusable.
-      // Tear it down so the NEXT clip builds a fresh engine instead of
-      // hanging forever on a dead one.
-      try { ffmpeg.terminate(); } catch {}
+    if (clip.status === "failed" || clip.status === "cancelled" || clip.status === "queued") {
+      // Failure, cancel, or stall-retry: the wasm instance may be aborted or
+      // already terminated. Tear it down so the next job builds a fresh engine.
+      try { if (ffmpeg) ffmpeg.terminate(); } catch {}
       ffmpeg = null;
       engineReady = null;
     } else {
