@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JuPreview — footage preview</title>
+<script src="coi-serviceworker.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0c0e;          /* stage */
+    --panel: #141619;       /* side panel / bars */
+    --panel-2: #1c1f23;     /* raised elements */
+    --line: #24282d;        /* hairlines */
+    --text: #d7dade;        /* primary text */
+    --dim: #7c828a;         /* secondary text */
+    --tally: #e8a13c;       /* amber tally — active / attention */
+    --ok: #6fbf8a;          /* ready */
+    --err: #d96b6b;         /* failed */
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, Menlo, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 14px;
+    overflow: hidden;
+  }
+  button { font-family: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--tally); outline-offset: 2px; }
+
+  #app { display: grid; grid-template-rows: 44px 1fr; height: 100%; }
+
+  /* ── top bar ─────────────────────────────── */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .wordmark { font-weight: 650; letter-spacing: 0.02em; font-size: 15px; }
+  .wordmark span { color: var(--tally); }
+  .env { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .env b { color: var(--text); font-weight: 500; }
+
+  /* ── main split ──────────────────────────── */
+  main { display: grid; grid-template-columns: 264px 1fr; min-height: 0; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 160px 1fr; } }
+
+  /* ── clip list ───────────────────────────── */
+  #clips {
+    background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #clips .head {
+    padding: 10px 14px; font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #addBtn { color: var(--tally); font-size: 13px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; }
+  #addBtn:hover { background: var(--panel-2); }
+  #clipList { overflow-y: auto; flex: 1; }
+  .clip {
+    width: 100%; text-align: left; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); display: block;
+  }
+  .clip:hover { background: var(--panel-2); }
+  .clip.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--tally); }
+  .clip .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clip .meta { font-family: var(--mono); font-size: 10.5px; color: var(--dim); margin-top: 3px; display: flex; gap: 8px; align-items: center; }
+  .chip { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+  .chip.ready   { color: var(--ok); border: 1px solid var(--ok); }
+  .chip.native  { color: var(--ok); border: 1px solid var(--ok); }
+  .chip.working { color: var(--tally); border: 1px solid var(--tally); }
+  .chip.queued  { color: var(--dim); border: 1px solid var(--line); }
+  .chip.failed  { color: var(--err); border: 1px solid var(--err); }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0%; background: var(--tally); transition: width 0.3s; }
+
+  /* ── stage ───────────────────────────────── */
+  #stage { display: grid; grid-template-rows: 1fr auto; min-height: 0; position: relative; }
+  #viewport { position: relative; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+  canvas, #fallbackVideo { max-width: 100%; max-height: 100%; display: block; }
+  #fallbackVideo { display: none; }
+
+  /* empty state = the drop invitation */
+  #empty {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px;
+  }
+  #empty .frame {
+    width: min(420px, 80%); aspect-ratio: 16/9; border: 1px dashed var(--line); border-radius: 6px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  }
+  #empty h1 { font-size: 15px; font-weight: 550; }
+  #empty p { color: var(--dim); font-size: 12.5px; max-width: 380px; line-height: 1.5; }
+  #empty .mono { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+
+  /* busy overlay on the viewport while active clip prepares */
+  #prep {
+    position: absolute; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px; background: rgba(11,12,14,0.85);
+  }
+  #prep .pct { font-family: var(--mono); font-size: 34px; color: var(--tally); }
+  #prep .what { color: var(--dim); font-size: 12.5px; }
+  #prep .speed { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  #cancelBtn { margin-top: 6px; font-size: 12px; color: var(--dim); border: 1px solid var(--line); padding: 4px 12px; border-radius: 4px; }
+  #cancelBtn:hover { color: var(--err); border-color: var(--err); }
+
+  /* drag-over veil */
+  #dropVeil {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(11,12,14,0.8); border: 2px dashed var(--tally); z-index: 40;
+    font-size: 15px; color: var(--tally); pointer-events: none;
+  }
+  body.dragging #dropVeil { display: flex; }
+
+  /* ── transport bar ───────────────────────── */
+  #transport {
+    display: none; align-items: center; gap: 12px;
+    padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  #playBtn { width: 34px; height: 30px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
+  #playBtn:hover { background: var(--panel-2); }
+  #tc { font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 118px; }
+  #seek { flex: 1; min-width: 140px; accent-color: var(--tally); height: 4px; }
+
+  /* the LUT switch — field-monitor style */
+  #lutSwitch {
+    display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+    font-family: var(--mono); font-size: 11px;
+  }
+  #lutSwitch button { padding: 6px 12px; color: var(--dim); letter-spacing: 0.05em; }
+  #lutSwitch button.on { background: var(--tally); color: #141310; font-weight: 600; }
+  #lutName { font-family: var(--mono); font-size: 10.5px; color: var(--dim); max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .tbtn { font-size: 12px; color: var(--dim); border: 1px solid var(--line); padding: 6px 10px; border-radius: 4px; }
+  .tbtn:hover { color: var(--text); background: var(--panel-2); }
+
+  /* toast / notices */
+  #notice {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    padding: 8px 14px; border-radius: 5px; font-size: 12.5px; display: none; max-width: 84%;
+    z-index: 50;
+  }
+
+  @media (prefers-reduced-motion: reduce) { .bar i { transition: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="wordmark">Ju<span>Preview</span></div>
+    <div class="env" id="env">checking engine…</div>
+  </header>
+
+  <main>
+    <aside id="clips">
+      <div class="head">
+        <span>Clips</span>
+        <button id="addBtn" title="Add files">+ Add</button>
+      </div>
+      <div id="clipList"></div>
+    </aside>
+
+    <section id="stage">
+      <div id="viewport">
+        <canvas id="glCanvas"></canvas>
+        <video id="fallbackVideo" controls playsinline></video>
+
+        <div id="empty">
+          <div class="frame">
+            <h1>Drop footage here</h1>
+            <p>Canon R5 C-Log3 (HEVC 4:2:2 10-bit), ProRes, or regular H.264 — it plays right in the browser. Nothing uploads; files never leave this computer.</p>
+            <span class="mono">.MP4&ensp;.MOV</span>
+          </div>
+        </div>
+
+        <div id="prep">
+          <div class="pct" id="prepPct">0%</div>
+          <div class="what" id="prepWhat">Preparing preview…</div>
+          <div class="speed" id="prepSpeed"></div>
+          <button id="cancelBtn">Cancel</button>
+        </div>
+
+        <div id="notice"></div>
+      </div>
+
+      <div id="transport">
+        <button id="playBtn" title="Play / pause (Space)">▶</button>
+        <span id="tc">00:00:00 / 00:00:00</span>
+        <input type="range" id="seek" min="0" max="1000" value="0" step="1">
+        <div id="lutSwitch" title="Viewing transform (L)">
+          <button id="lutLog" class="on">LOG</button>
+          <button id="lut709">709</button>
+        </div>
+        <span id="lutName">built-in C-Log3/C.Gamut → 709</span>
+        <button class="tbtn" id="cubeBtn" title="Load a .cube LUT (e.g. Canon's official)">.cube</button>
+        <button class="tbtn" id="dlBtn" title="Download the playable proxy (log)">Save proxy</button>
+        <button class="tbtn" id="fsBtn" title="Fullscreen (F)">⛶</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="dropVeil">Drop to add clips</div>
+
+<input type="file" id="fileInput" multiple accept="video/*,.mp4,.mov,.MP4,.MOV" hidden>
+<input type="file" id="cubeInput" accept=".cube,.CUBE" hidden>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
