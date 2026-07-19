@@ -135,6 +135,7 @@
 
   .tbtn { font-size: 12px; color: var(--dim); border: 1px solid var(--line); padding: 6px 10px; border-radius: 4px; }
   .tbtn:hover { color: var(--text); background: var(--panel-2); }
+  .tbtn.on { background: var(--tally); color: #141310; border-color: var(--tally); font-weight: 600; }
 
   /* toast / notices */
   #notice {
@@ -195,6 +196,7 @@
           <button id="lut709">709</button>
         </div>
         <span id="lutName">built-in C-Log3/C.Gamut → 709</span>
+        <button class="tbtn" id="anaBtn" title="Anamorphic desqueeze ×1.5 (A)">1.5×</button>
         <button class="tbtn" id="cubeBtn" title="Load a .cube LUT (e.g. Canon's official)">.cube</button>
         <button class="tbtn" id="dlBtn" title="Download the playable proxy (log)">Save proxy</button>
         <button class="tbtn" id="fsBtn" title="Fullscreen (F)">⛶</button>

@@ -22,7 +22,7 @@ const els = {
   notice: $("notice"), transport: $("transport"),
   playBtn: $("playBtn"), tc: $("tc"), seek: $("seek"),
   lutLog: $("lutLog"), lut709: $("lut709"), lutName: $("lutName"),
-  cubeBtn: $("cubeBtn"), dlBtn: $("dlBtn"), fsBtn: $("fsBtn"),
+  cubeBtn: $("cubeBtn"), dlBtn: $("dlBtn"), fsBtn: $("fsBtn"), anaBtn: $("anaBtn"),
   canvas: $("glCanvas"), fallbackVideo: $("fallbackVideo"),
   viewport: $("viewport"),
 };
@@ -30,6 +30,12 @@ const els = {
 const cores = Math.min(navigator.hardwareConcurrency || 4, 8);
 const isolated = !!window.crossOriginIsolated;
 const PREVIEW_HEIGHT = 720; // 720 = faster prep; raise to 1080 for a sharper proxy
+<<<<<<< Updated upstream
+=======
+const ANAMORPHIC_FACTOR = 1.5; // horizontal desqueeze applied by the 1.5× button
+const DEFAULT_LUT_URL = "luts/CinemaGamut_CanonLog3-to-BT709_WideDR_33_FF_Ver_2_0.cube";
+const DEFAULT_LUT_LABEL = "Canon WideDR (official .cube)";
+>>>>>>> Stashed changes
 
 /* ── notices ─────────────────────────────────────────── */
 let noticeTimer = null;
@@ -160,8 +166,9 @@ let rafId = null;
 function draw() {
   rafId = requestAnimationFrame(draw);
   if (!glOK || video.readyState < 2 || !video.videoWidth) return;
-  if (els.canvas.width !== video.videoWidth || els.canvas.height !== video.videoHeight) {
-    els.canvas.width = video.videoWidth;
+  const tw = Math.round(video.videoWidth * desqueeze);
+  if (els.canvas.width !== tw || els.canvas.height !== video.videoHeight) {
+    els.canvas.width = tw;
     els.canvas.height = video.videoHeight;
     gl.viewport(0, 0, els.canvas.width, els.canvas.height);
   }
@@ -176,7 +183,39 @@ function draw() {
 let lutMode = 0;          // what the 709 button applies: 1 built-in, 2 cube
 let showing709 = false;
 let cubeLoadedName = null;
+let defaultCube = null;   // Canon's official WideDR cube, fetched from the repo
+let desqueeze = 1;        // 1 or ANAMORPHIC_FACTOR (display-only)
 lutMode = 1;
+
+function uploadCubeTexture({ N, rgba }) {
+  if (!lutTex) lutTex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_3D, lutTex);
+  for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+                        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE],
+                        [gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE]])
+    gl.texParameteri(gl.TEXTURE_3D, p, v);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, N, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  gl.uniform1f(uLutN, N);
+}
+
+async function loadDefaultLut() {
+  if (!glOK) return;
+  try {
+    const res = await fetch(DEFAULT_LUT_URL);
+    if (!res.ok) throw new Error();
+    defaultCube = parseCube(await res.text());
+    if (!cubeLoadedName) {              // don't stomp a user-loaded cube
+      uploadCubeTexture(defaultCube);
+      lutMode = 2;
+      els.lutName.textContent = DEFAULT_LUT_LABEL;
+      applyMode();
+    }
+  } catch {
+    // Cube missing or unreadable — the verified math transform stays in charge.
+  }
+}
 
 function applyMode() {
   if (!glOK) return;
@@ -217,17 +256,8 @@ els.cubeInput.addEventListener("change", async () => {
   els.cubeInput.value = "";
   if (!f || !glOK) return;
   try {
-    const { N, rgba } = parseCube(await f.text());
-    if (!lutTex) lutTex = gl.createTexture();
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_3D, lutTex);
-    for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
-                          [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE],
-                          [gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE]])
-      gl.texParameteri(gl.TEXTURE_3D, p, v);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, N, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-    gl.uniform1f(uLutN, N);
+    const cube = parseCube(await f.text());
+    uploadCubeTexture(cube);
     lutMode = 2;
     cubeLoadedName = f.name;
     els.lutName.textContent = "✕ " + f.name;
@@ -243,11 +273,29 @@ els.cubeInput.addEventListener("change", async () => {
 els.lutName.addEventListener("click", () => {
   if (!cubeLoadedName) return;
   cubeLoadedName = null;
-  lutMode = 1;
-  els.lutName.textContent = "built-in C-Log3/C.Gamut → 709";
+  if (defaultCube) {
+    uploadCubeTexture(defaultCube);
+    lutMode = 2;
+    els.lutName.textContent = DEFAULT_LUT_LABEL;
+  } else {
+    lutMode = 1;
+    els.lutName.textContent = "built-in C-Log3/C.Gamut → 709";
+  }
   els.lutName.title = "";
   els.lutName.style.cursor = "default";
   applyMode();
+});
+
+/* ── anamorphic desqueeze ────────────────────────────── */
+function applyDesqueeze() {
+  els.anaBtn.classList.toggle("on", desqueeze !== 1);
+  els.fallbackVideo.style.transform = desqueeze === 1 ? "" : `scaleX(${desqueeze})`;
+  // canvas path picks the new width up on the next drawn frame
+}
+els.anaBtn.textContent = ANAMORPHIC_FACTOR + "×";
+els.anaBtn.addEventListener("click", () => {
+  desqueeze = desqueeze === 1 ? ANAMORPHIC_FACTOR : 1;
+  applyDesqueeze();
 });
 
 /* ── clips ───────────────────────────────────────────── */
@@ -619,9 +667,13 @@ window.addEventListener("keydown", (e) => {
     applyMode();
   } else if (e.key === "f" || e.key === "F") {
     els.fsBtn.click();
+  } else if (e.key === "a" || e.key === "A") {
+    els.anaBtn.click();
   }
 });
 
 /* first paint */
 applyMode();
+applyDesqueeze();
 renderClips();
+loadDefaultLut();

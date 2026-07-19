@@ -14,13 +14,19 @@ machine; the site is just static files.
 - **C-Log HEVC 4:2:2 10-bit** gets decoded in the browser by ffmpeg.wasm and
   turned into a smooth 1080p H.264 proxy, with a progress % and speed readout
   while it prepares. ProRes drops work through the same path (and prep faster).
-- **LOG | 709 toggle** — a built-in C-Log3 / Cinema Gamut → Rec.709 view
-  transform (Canon's published math, constants verified against
-  colour-science). For an exact match to your grading LUT, hit **.cube** and
-  load Canon's official LUT — it applies in real time.
+- **LOG | 709 toggle** — the 709 view uses Canon's official
+  CinemaGamut/C-Log3 → BT.709 WideDR cube (shipped in `luts/`), so what you
+  see matches the grade you'd start from. If that file is ever missing, a
+  built-in mathematical transform (Canon's published math, verified against
+  colour-science) takes over. **.cube** still loads any other LUT on top;
+  click the ✕ name to return to the Canon default.
+- **1.5× desqueeze** — one button (or **A**) stretches the image horizontally
+  for anamorphic footage. Display-only: saved proxies stay as recorded.
+  The factor is `ANAMORPHIC_FACTOR` at the top of `app.js` if you ever shoot
+  1.33× or 2×.
 - **Save proxy** downloads the 1080p H.264 file it made, so a colleague can
   keep a playable copy.
-- Space = play/pause · L = toggle LUT · F = fullscreen.
+- Space = play/pause · L = toggle LUT · A = desqueeze · F = fullscreen.
 
 ## Deploy to GitHub Pages
 
@@ -82,6 +88,7 @@ index.html                 UI
 app.js                     all logic (player, engine, WebGL LUT pipeline)
 coi-serviceworker.min.js   enables multithreading on GitHub Pages
 .nojekyll                  keeps GitHub Pages from mangling the site
+luts/                      Canon's official WideDR cube (the default 709 view)
 vendor/ffmpeg/             @ffmpeg/ffmpeg 0.12.15 (ESM)
 vendor/core/               @ffmpeg/core-mt 0.12.10 (the actual decoder, 32.7 MB)
 ```
