@@ -26,7 +26,7 @@ machine; the site is just static files.
   1.33× or 2×.
 - **Save proxy** downloads the 1080p H.264 file it made, so a colleague can
   keep a playable copy.
-- Space = play/pause · L = toggle LUT · A = desqueeze · F = fullscreen.
+- Space = play/pause · L = toggle LUT · A = desqueeze.
 
 ## Deploy to GitHub Pages
 

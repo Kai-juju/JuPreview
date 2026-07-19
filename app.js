@@ -22,7 +22,7 @@ const els = {
   notice: $("notice"), transport: $("transport"),
   playBtn: $("playBtn"), tc: $("tc"), seek: $("seek"),
   lutLog: $("lutLog"), lut709: $("lut709"), lutName: $("lutName"),
-  cubeBtn: $("cubeBtn"), dlBtn: $("dlBtn"), fsBtn: $("fsBtn"), anaBtn: $("anaBtn"),
+  cubeBtn: $("cubeBtn"), dlBtn: $("dlBtn"), anaBtn: $("anaBtn"),
   canvas: $("glCanvas"), fallbackVideo: $("fallbackVideo"),
   viewport: $("viewport"),
 };
@@ -30,12 +30,9 @@ const els = {
 const cores = Math.min(navigator.hardwareConcurrency || 4, 8);
 const isolated = !!window.crossOriginIsolated;
 const PREVIEW_HEIGHT = 720; // 720 = faster prep; raise to 1080 for a sharper proxy
-<<<<<<< Updated upstream
-=======
 const ANAMORPHIC_FACTOR = 1.5; // horizontal desqueeze applied by the 1.5× button
 const DEFAULT_LUT_URL = "luts/CinemaGamut_CanonLog3-to-BT709_WideDR_33_FF_Ver_2_0.cube";
 const DEFAULT_LUT_LABEL = "Canon WideDR (official .cube)";
->>>>>>> Stashed changes
 
 /* ── notices ─────────────────────────────────────────── */
 let noticeTimer = null;
@@ -653,10 +650,6 @@ els.dlBtn.addEventListener("click", () => {
   a.click();
 });
 
-els.fsBtn.addEventListener("click", () => {
-  document.fullscreenElement ? document.exitFullscreen() : els.viewport.requestFullscreen();
-});
-
 window.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
   if (e.code === "Space") {
@@ -665,8 +658,6 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "l" || e.key === "L") {
     showing709 = !showing709;
     applyMode();
-  } else if (e.key === "f" || e.key === "F") {
-    els.fsBtn.click();
   } else if (e.key === "a" || e.key === "A") {
     els.anaBtn.click();
   }
