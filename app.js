@@ -420,13 +420,24 @@ async function transcode(clip) {
     if (clip.status !== "cancelled") {
       clip.status = "failed";
       const tail = logTail.join("\n");
-      clip.error = /out of memory|abort/i.test(tail)
-        ? "Ran out of memory — this clip is very long. Try a shorter clip, or lower PREVIEW_HEIGHT to 720 in app.js."
+      const memoryHit = /out of memory|abort|memory access|table index|null function/i.test(tail);
+      const big = clip.file.size > 1_100_000_000; // ~1.1 GB+
+      clip.error = (memoryHit || big)
+        ? "Too large for the browser's memory ceiling — very long / multi-GB clips can exceed it. Try a shorter section, or set PREVIEW_HEIGHT to 720 in app.js. Other clips are unaffected."
         : "Couldn't decode this file. It may use a codec the engine doesn't include.";
     }
   } finally {
-    try { await ffmpeg.deleteFile("out.mp4"); } catch {}
-    try { await ffmpeg.unmount("/input"); } catch {}
+    if (clip.status === "failed" || clip.status === "cancelled") {
+      // A crash/OOM can leave the wasm instance aborted and unusable.
+      // Tear it down so the NEXT clip builds a fresh engine instead of
+      // hanging forever on a dead one.
+      try { ffmpeg.terminate(); } catch {}
+      ffmpeg = null;
+      engineReady = null;
+    } else {
+      try { await ffmpeg.deleteFile("out.mp4"); } catch {}
+      try { await ffmpeg.unmount("/input"); } catch {}
+    }
     currentJob = null;
   }
   renderClips();
