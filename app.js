@@ -22,7 +22,7 @@ const els = {
   notice: $("notice"), transport: $("transport"),
   playBtn: $("playBtn"), tc: $("tc"), seek: $("seek"),
   lutLog: $("lutLog"), lut709: $("lut709"), lutName: $("lutName"),
-  cubeBtn: $("cubeBtn"), dlBtn: $("dlBtn"), anaBtn: $("anaBtn"),
+  cubeBtn: $("cubeBtn"), dlBtn: $("dlBtn"), anaBtn: $("anaBtn"), buildTag: $("buildTag"),
   canvas: $("glCanvas"), fallbackVideo: $("fallbackVideo"),
   viewport: $("viewport"),
 };
@@ -155,7 +155,15 @@ glOK = initGL();
 if (!glOK) {
   els.canvas.style.display = "none";
   els.fallbackVideo.style.display = "block";
-  notify("WebGL2 unavailable — playing without the LUT preview.", 8000);
+  // The LUT/color path is WebGL2-only. Say so plainly instead of failing silently.
+  for (const b of [els.lutLog, els.lut709, els.cubeBtn]) {
+    b.disabled = true;
+    b.style.opacity = "0.4";
+    b.style.cursor = "not-allowed";
+    b.title = "Needs WebGL2 (disabled on this browser) — footage still plays.";
+  }
+  els.lutName.textContent = "color preview off — WebGL2 unavailable";
+  notify("This browser has WebGL2 turned off, so the LOG/709 colour preview can't run — the footage itself still plays fine. On a locked-down Mac, turning on hardware acceleration (or opening the page in Chrome) brings the colour tools back.", 0);
 }
 
 /* render loop */
@@ -361,6 +369,13 @@ function startPlayback(c) {
 }
 function stopPlayback() {
   (glOK ? video : els.fallbackVideo).pause();
+  if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+  clearCanvas();
+}
+function clearCanvas() {
+  if (!glOK) return;
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
 }
 
 /* ── native playability probe ────────────────────────── */
@@ -668,3 +683,10 @@ applyMode();
 applyDesqueeze();
 renderClips();
 loadDefaultLut();
+
+// Safari restores the whole page (last canvas frame and all) from its
+// back-forward cache on reload — force a clean load so no ghost frame lingers.
+window.addEventListener("pageshow", (e) => { if (e.persisted) location.reload(); });
+
+// Stamp WebGL state next to the build number so it's obvious per-machine.
+els.buildTag.textContent = els.buildTag.textContent.trim() + (glOK ? "  ·  GL ✓" : "  ·  GL ✗");
